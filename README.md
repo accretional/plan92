@@ -2,7 +2,15 @@
 
 A Plan9-like filesystem service providing file I/O operations over gRPC with hierarchical permission checking and session-based file descriptor management.
 
+# Under Construction!
+
+At Accretional we're building a multi-tenant, networked, unix-like operating system with a capability-based security model. Of course, that means everything is a file, even over the network.
+
+Historically, Plan9 from Bell Labs has been perhaps the most well known and influential attempt at maximally delivering on that idea. There's no doubt that it influenced computing forever, living on in Linux and systems like grpc/proto where even apis have "FileDescriptorProtos", as well as countless developers. Plan92 is named in honor of that contribution.
+
 ## Overview
+
+Note - this is in flux, LLM generated and may go out of date. Currently, there is some mild controvery over whether to include sessions/omode in the API spec.
 
 Plan92 implements a filesystem abstraction over gRPC that enables:
 - **Session-based file access** with isolated file descriptor tables
