@@ -68,7 +68,7 @@ BenchmarkCatCommand_1KB-2   	   53707	    111030 ns/op
 
 ```bash
 # Run all cat tests
-cd server
+cd /home/workspace/plan92/server
 go test -v -run TestCatCommand
 
 # Run specific test

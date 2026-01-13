@@ -21,7 +21,7 @@ func main() {
 	}
 	defer conn.Close()
 
-	client := pb.NewPlan92Client(conn)
+	client := pb.NewPlan92FSClient(conn)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
@@ -29,61 +29,45 @@ func main() {
 	log.Println("Plan92 Filesystem Client Example")
 	log.Println("========================================")
 
-	// Step 1: Create Session
-	log.Println("\n[1] Creating session...")
-	sessionResp, err := client.CreateSession(ctx, &pb.CreateSessionRequest{
-		User:   "alice",
-		Groups: []string{"users", "developers"},
+	// ========================================================================
+	// Demo 1: Streamed Write and Read
+	// ========================================================================
+	log.Println("\n[Demo 1] Streamed Write and Read")
+	log.Println("----------------------------------")
+
+	// Open file
+	log.Println("Opening /test.txt...")
+	fdResp, err := client.Open(ctx, &pb.URI{
+		Path: "/test.txt",
 	})
 	if err != nil {
-		log.Fatalf("Failed to create session: %v", err)
+		log.Fatalf("Failed to open file: %v", err)
 	}
-	sessionID := sessionResp.SessionId
-	log.Printf("✓ Session created: %s", sessionID)
-	log.Printf("  Created at: %s", sessionResp.CreatedAt.AsTime().Format(time.RFC3339))
-
-	// Step 2: Write File
-	log.Println("\n[2] Writing file /test.txt...")
-
-	// Open for writing
-	openResp, err := client.Open(ctx, &pb.OpenRequest{
-		Path:      "/test.txt",
-		Mode:      pb.OpenMode_OPEN_MODE_WRITE,
-		SessionId: sessionID,
-	})
-	if err != nil {
-		log.Fatalf("Failed to open file for writing: %v", err)
-	}
-	writeFD := openResp.Fd
-	log.Printf("✓ Opened for writing: fd=%d", writeFD)
+	fd := fdResp.Fd
+	log.Printf("✓ Opened: fd=%d", fd)
 
 	// Stream write
+	log.Println("Writing data via stream...")
 	writeStream, err := client.Write(ctx)
 	if err != nil {
 		log.Fatalf("Failed to create write stream: %v", err)
 	}
 
-	// Send metadata
+	// First message: FD
 	err = writeStream.Send(&pb.WriteRequest{
-		Data: &pb.WriteRequest_Metadata{
-			Metadata: &pb.WriteMetadata{
-				Fd:        writeFD,
-				Offset:    -1, // Append
-				TotalSize: int64(len("Hello, Plan92 Filesystem!")),
-			},
-		},
+		Data: &pb.WriteRequest_Fd{Fd: fd},
 	})
 	if err != nil {
-		log.Fatalf("Failed to send write metadata: %v", err)
+		log.Fatalf("Failed to send fd: %v", err)
 	}
 
-	// Send data chunk
+	// Subsequent messages: Data chunks
 	content := []byte("Hello, Plan92 Filesystem!")
 	err = writeStream.Send(&pb.WriteRequest{
 		Data: &pb.WriteRequest_Chunk{Chunk: content},
 	})
 	if err != nil {
-		log.Fatalf("Failed to send write chunk: %v", err)
+		log.Fatalf("Failed to send chunk: %v", err)
 	}
 
 	// Close write stream and get response
@@ -91,60 +75,42 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to close write stream: %v", err)
 	}
-	log.Printf("✓ Wrote %d bytes", writeResp.BytesWritten)
-
-	// Close write FD
-	_, err = client.Close(ctx, &pb.CloseRequest{Fd: writeFD})
-	if err != nil {
-		log.Fatalf("Failed to close write FD: %v", err)
+	log.Printf("✓ Wrote %d bytes", writeResp.Count)
+	if writeResp.Errno != nil {
+		log.Printf("  Warning: errno=%d", *writeResp.Errno)
 	}
-	log.Printf("✓ Closed fd=%d", writeFD)
 
-	// Step 3: Stat File
-	log.Println("\n[3] Getting file stats...")
-	statResp, err := client.Stat(ctx, &pb.StatRequest{
-		Path:      "/test.txt",
-		SessionId: sessionID,
-	})
+	// Close file
+	closeResp, err := client.Close(ctx, &pb.OpenFileDescriptor{Fd: fd})
 	if err != nil {
-		log.Fatalf("Failed to stat file: %v", err)
+		log.Fatalf("Failed to close: %v", err)
 	}
-	log.Printf("✓ File stats:")
-	log.Printf("  Type: %s", statResp.Info.Type)
-	log.Printf("  Mode: %o", statResp.Info.Mode)
-	log.Printf("  Size: %d bytes", statResp.Info.Length)
-	log.Printf("  Owner: %s", statResp.Info.Owner)
-	log.Printf("  Group: %s", statResp.Info.Group)
-	log.Printf("  Modified: %s", statResp.Info.Mtime.AsTime().Format(time.RFC3339))
-
-	// Step 4: Read File
-	log.Println("\n[4] Reading file /test.txt...")
+	if closeResp.Errno != nil {
+		log.Printf("Warning: close errno=%d", *closeResp.Errno)
+	}
+	log.Printf("✓ Closed fd=%d", fd)
 
 	// Open for reading
-	openResp, err = client.Open(ctx, &pb.OpenRequest{
-		Path:      "/test.txt",
-		Mode:      pb.OpenMode_OPEN_MODE_READ,
-		SessionId: sessionID,
+	log.Println("Opening /test.txt for reading...")
+	fdResp, err = client.Open(ctx, &pb.URI{
+		Path: "/test.txt",
 	})
 	if err != nil {
-		log.Fatalf("Failed to open file for reading: %v", err)
+		log.Fatalf("Failed to open file: %v", err)
 	}
-	readFD := openResp.Fd
+	readFD := fdResp.Fd
 	log.Printf("✓ Opened for reading: fd=%d", readFD)
 
 	// Stream read
-	readStream, err := client.Read(ctx, &pb.ReadRequest{
-		Fd:     readFD,
-		Offset: -1, // Current position (start)
-		Count:  -1, // Read all
+	log.Println("Reading data via stream...")
+	readStream, err := client.Read(ctx, &pb.OpenFileDescriptor{
+		Fd: readFD,
 	})
 	if err != nil {
 		log.Fatalf("Failed to create read stream: %v", err)
 	}
 
 	var readContent []byte
-	var readMetadata *pb.ReadMetadata
-
 	for {
 		resp, err := readStream.Recv()
 		if err == io.EOF {
@@ -153,87 +119,101 @@ func main() {
 		if err != nil {
 			log.Fatalf("Failed to receive read response: %v", err)
 		}
-
-		switch data := resp.Data.(type) {
-		case *pb.ReadResponse_Metadata:
-			readMetadata = data.Metadata
-			log.Printf("✓ Read metadata received:")
-			log.Printf("  Total size: %d bytes", readMetadata.TotalSize)
-		case *pb.ReadResponse_Chunk:
-			readContent = append(readContent, data.Chunk...)
-		}
+		readContent = append(readContent, resp.Data...)
 	}
 
 	log.Printf("✓ Read %d bytes: %q", len(readContent), string(readContent))
 
 	// Close read FD
-	_, err = client.Close(ctx, &pb.CloseRequest{Fd: readFD})
+	closeResp, err = client.Close(ctx, &pb.OpenFileDescriptor{Fd: readFD})
 	if err != nil {
-		log.Fatalf("Failed to close read FD: %v", err)
+		log.Fatalf("Failed to close: %v", err)
+	}
+	if closeResp.Errno != nil {
+		log.Printf("Warning: close errno=%d", *closeResp.Errno)
 	}
 	log.Printf("✓ Closed fd=%d", readFD)
 
-	// Step 5: Write Another File
-	log.Println("\n[5] Writing file /data/output.txt...")
+	// ========================================================================
+	// Demo 2: Non-Streamed Write and Read (WriteAll/ReadAll)
+	// ========================================================================
+	log.Println("\n[Demo 2] Non-Streamed Write and Read")
+	log.Println("--------------------------------------")
 
-	openResp, err = client.Open(ctx, &pb.OpenRequest{
-		Path:      "/data/output.txt",
-		Mode:      pb.OpenMode_OPEN_MODE_WRITE,
-		SessionId: sessionID,
+	// Open file
+	log.Println("Opening /small.txt...")
+	fdResp, err = client.Open(ctx, &pb.URI{
+		Path: "/small.txt",
 	})
 	if err != nil {
-		log.Fatalf("Failed to open file for writing: %v", err)
+		log.Fatalf("Failed to open file: %v", err)
 	}
-	fd2 := openResp.Fd
-	log.Printf("✓ Opened for writing: fd=%d", fd2)
+	fd2 := fdResp.Fd
+	log.Printf("✓ Opened: fd=%d", fd2)
 
-	writeStream2, err := client.Write(ctx)
-	if err != nil {
-		log.Fatalf("Failed to create write stream: %v", err)
-	}
-
-	content2 := []byte("This demonstrates multiple file operations in a single session.")
-	err = writeStream2.Send(&pb.WriteRequest{
-		Data: &pb.WriteRequest_Metadata{
-			Metadata: &pb.WriteMetadata{
-				Fd:        fd2,
-				Offset:    -1,
-				TotalSize: int64(len(content2)),
-			},
-		},
+	// Write all at once
+	log.Println("Writing data with WriteAll...")
+	smallContent := []byte("Quick write!")
+	writeResp2, err := client.WriteAll(ctx, &pb.WriteAllRequest{
+		Fd:   fd2,
+		Data: smallContent,
 	})
 	if err != nil {
-		log.Fatalf("Failed to send write metadata: %v", err)
+		log.Fatalf("Failed to write all: %v", err)
+	}
+	log.Printf("✓ Wrote %d bytes", writeResp2.Count)
+	if writeResp2.Errno != nil {
+		log.Printf("  Warning: errno=%d", *writeResp2.Errno)
 	}
 
-	err = writeStream2.Send(&pb.WriteRequest{
-		Data: &pb.WriteRequest_Chunk{Chunk: content2},
-	})
+	// Read all at once
+	log.Println("Reading data with ReadAll...")
+	readResp, err := client.ReadAll(ctx, &pb.OpenFileDescriptor{Fd: fd2})
 	if err != nil {
-		log.Fatalf("Failed to send write chunk: %v", err)
+		log.Fatalf("Failed to read all: %v", err)
 	}
+	log.Printf("✓ Read %d bytes: %q", len(readResp.Data), string(readResp.Data))
 
-	writeResp2, err := writeStream2.CloseAndRecv()
+	// Close file
+	closeResp, err = client.Close(ctx, &pb.OpenFileDescriptor{Fd: fd2})
 	if err != nil {
-		log.Fatalf("Failed to close write stream: %v", err)
+		log.Fatalf("Failed to close: %v", err)
 	}
-	log.Printf("✓ Wrote %d bytes", writeResp2.BytesWritten)
-
-	_, err = client.Close(ctx, &pb.CloseRequest{Fd: fd2})
-	if err != nil {
-		log.Fatalf("Failed to close FD: %v", err)
+	if closeResp.Errno != nil {
+		log.Printf("Warning: close errno=%d", *closeResp.Errno)
 	}
 	log.Printf("✓ Closed fd=%d", fd2)
 
-	// Step 6: Close Session
-	log.Println("\n[6] Closing session...")
-	_, err = client.CloseSession(ctx, &pb.CloseSessionRequest{
-		SessionId: sessionID,
+	// ========================================================================
+	// Demo 3: Direct URI-Based Operations
+	// ========================================================================
+	log.Println("\n[Demo 3] Direct URI-Based Operations")
+	log.Println("--------------------------------------")
+
+	// Write directly by path
+	log.Println("Writing to /direct.txt...")
+	directContent := []byte("Direct write without open/close!")
+	directWriteResp, err := client.WriteDirect(ctx, &pb.WriteDirectRequest{
+		Path: "/direct.txt",
+		Data: directContent,
 	})
 	if err != nil {
-		log.Fatalf("Failed to close session: %v", err)
+		log.Fatalf("Failed to write direct: %v", err)
 	}
-	log.Printf("✓ Session closed: %s", sessionID)
+	log.Printf("✓ Wrote %d bytes directly", directWriteResp.Count)
+	if directWriteResp.Errno != nil {
+		log.Printf("  Warning: errno=%d", *directWriteResp.Errno)
+	}
+
+	// Read directly by path
+	log.Println("Reading from /direct.txt...")
+	directReadResp, err := client.ReadDirect(ctx, &pb.URI{
+		Path: "/direct.txt",
+	})
+	if err != nil {
+		log.Fatalf("Failed to read direct: %v", err)
+	}
+	log.Printf("✓ Read %d bytes directly: %q", len(directReadResp.Data), string(directReadResp.Data))
 
 	log.Println("\n========================================")
 	log.Println("✓ All operations completed successfully!")

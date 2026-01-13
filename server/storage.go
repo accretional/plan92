@@ -3,16 +3,11 @@ package main
 import (
 	"fmt"
 	"sync"
-	"time"
-
-	pb "github.com/accretional/plan92/gen/plan92/v1"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-// FileData represents the content and metadata of a file in storage
+// FileData represents the content of a file in storage
 type FileData struct {
 	Content  []byte
-	Info     *pb.FileInfo
 	RefCount int32 // Number of open file descriptors
 }
 
@@ -43,24 +38,18 @@ func (s *MemoryStorage) Get(path string) (*FileData, error) {
 }
 
 // Set stores file data at the given path
-func (s *MemoryStorage) Set(path string, content []byte, info *pb.FileInfo) error {
+func (s *MemoryStorage) Set(path string, content []byte) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-
-	// Update mtime
-	info.Mtime = timestamppb.New(time.Now())
-	info.Length = int64(len(content))
 
 	data, exists := s.files[path]
 	if exists {
 		// Update existing file
 		data.Content = content
-		data.Info = info
 	} else {
 		// Create new file
 		s.files[path] = &FileData{
 			Content:  content,
-			Info:     info,
 			RefCount: 0,
 		}
 	}
@@ -68,8 +57,8 @@ func (s *MemoryStorage) Set(path string, content []byte, info *pb.FileInfo) erro
 	return nil
 }
 
-// Create creates a new empty file with the given metadata
-func (s *MemoryStorage) Create(path string, info *pb.FileInfo) error {
+// Create creates a new empty file
+func (s *MemoryStorage) Create(path string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -77,12 +66,8 @@ func (s *MemoryStorage) Create(path string, info *pb.FileInfo) error {
 		return fmt.Errorf("file already exists: %s", path)
 	}
 
-	info.Mtime = timestamppb.New(time.Now())
-	info.Length = 0
-
 	s.files[path] = &FileData{
 		Content:  []byte{},
-		Info:     info,
 		RefCount: 0,
 	}
 
@@ -171,4 +156,41 @@ func (s *MemoryStorage) GetRefCount(path string) (int32, error) {
 	}
 
 	return data.RefCount, nil
+}
+
+// CreateSimple creates a new empty file with default metadata
+func (s *MemoryStorage) CreateSimple(path string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if _, exists := s.files[path]; exists {
+		return fmt.Errorf("file already exists: %s", path)
+	}
+
+	s.files[path] = &FileData{
+		Content:  []byte{},
+		RefCount: 0,
+	}
+
+	return nil
+}
+
+// Write writes data to an existing file, creating it if necessary
+func (s *MemoryStorage) Write(path string, content []byte) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	data, exists := s.files[path]
+	if exists {
+		// Update existing file
+		data.Content = content
+	} else {
+		// Create new file
+		s.files[path] = &FileData{
+			Content:  content,
+			RefCount: 0,
+		}
+	}
+
+	return nil
 }

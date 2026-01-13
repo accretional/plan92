@@ -1,51 +1,42 @@
 # Plan92 Filesystem RPC Service
 
-A Plan9-like filesystem service providing file I/O operations over gRPC with hierarchical permission checking and session-based file descriptor management.
+A Plan9-like filesystem service providing simple file I/O operations over gRPC with global file descriptor management.
 
 ## Overview
 
 Plan92 implements a filesystem abstraction over gRPC that enables:
-- **Session-based file access** with isolated file descriptor tables
-- **Hierarchical permission checking** through path component validation
+- **Simple file operations** - Open, Read, Write, Close without session management
 - **Streaming I/O** for efficient large file transfers
-- **Unix-style permissions** (user/group/other with rwx bits)
+- **Global file descriptors** that can be passed between operations
+- **In-memory storage** for fast access
 
 This service is designed to support building pipeline DAGs where file operations can be chained and composed.
 
 ## Architecture
 
-### Services
+### Service
 
 **Plan92 Service** (`plan92.proto`):
-- `CreateSession` - Initialize a new session with user context
-- `CloseSession` - Clean up session and all open file descriptors
-- `Open` - Open a file and return a file descriptor
+- `Open` - Open a file at a path and return a file descriptor
 - `Read` - Stream file contents from an open FD
 - `Write` - Stream data to write to an open FD
 - `Close` - Close a file descriptor
 - `Stat` - Get file metadata without opening
 
-**InodeService** (`inode.proto`):
-- `CheckPermission` - Validate permissions for a path
-- `AllocateFd` - Allocate a file descriptor for an opened file
-- `GetInode` - Retrieve inode information
-- `CreateInode` - Create a new file or directory
-
 ### Components
 
 - **Storage Backend** (`storage.go`) - In-memory file storage with reference counting
-- **FD Table** (`fdtable.go`) - File descriptor allocation and management
-- **Session Manager** (`session.go`) - Session lifecycle and cleanup
-- **Permission Checker** (`permissions.go`) - Hierarchical path permission validation
-- **Service Implementations** (`plan92_service.go`, `inode_service.go`) - gRPC service handlers
+- **FD Table** (`fdtable.go`) - Global file descriptor allocation and management
+- **Service Implementation** (`plan92_service.go`) - gRPC service handlers
 
 ## Building
 
 ```bash
 # Generate proto code
+cd /home/workspace/plan92
 protoc --go_out=gen --go_opt=module=github.com/accretional/plan92/gen \
        --go-grpc_out=gen --go-grpc_opt=module=github.com/accretional/plan92/gen \
-       plan92.proto inode.proto
+       plan92.proto
 
 # Build server
 cd server
@@ -61,7 +52,7 @@ go build -o plan92-client
 ### Start the Server
 
 ```bash
-cd server
+cd /home/workspace/plan92/server
 ./plan92-server
 ```
 
@@ -74,16 +65,15 @@ PORT=8080 ./plan92-server
 ### Run the Example Client
 
 ```bash
-cd client
+cd /home/workspace/plan92/client
 ./plan92-client
 ```
 
 The example client demonstrates:
-1. Creating a session
-2. Writing a file
+1. Writing a file
+2. Getting file statistics
 3. Reading the file back
-4. Getting file statistics
-5. Closing the session
+4. Writing another file
 
 ## Usage Example
 
@@ -94,17 +84,10 @@ conn, err := grpc.Dial("localhost:9000",
 )
 client := pb.NewPlan92Client(conn)
 
-// Create session
-session, _ := client.CreateSession(ctx, &pb.CreateSessionRequest{
-    User:   "alice",
-    Groups: []string{"users"},
-})
-
 // Open file for writing
 fd, _ := client.Open(ctx, &pb.OpenRequest{
-    Path:      "/test.txt",
-    Mode:      pb.OpenMode_OPEN_MODE_WRITE,
-    SessionId: session.SessionId,
+    Path: "/test.txt",
+    Mode: pb.OpenMode_OPEN_MODE_WRITE,
 })
 
 // Stream write
@@ -122,10 +105,32 @@ writeStream.CloseAndRecv()
 // Close file
 client.Close(ctx, &pb.CloseRequest{Fd: fd.Fd})
 
-// Close session
-client.CloseSession(ctx, &pb.CloseSessionRequest{
-    SessionId: session.SessionId,
+// Open file for reading
+readFd, _ := client.Open(ctx, &pb.OpenRequest{
+    Path: "/test.txt",
+    Mode: pb.OpenMode_OPEN_MODE_READ,
 })
+
+// Stream read
+readStream, _ := client.Read(ctx, &pb.ReadRequest{
+    Fd:     readFd.Fd,
+    Offset: -1, // Current position (start)
+    Count:  -1, // Read all
+})
+
+var content []byte
+for {
+    resp, err := readStream.Recv()
+    if err == io.EOF {
+        break
+    }
+    if chunk := resp.GetChunk(); chunk != nil {
+        content = append(content, chunk...)
+    }
+}
+
+// Close file
+client.Close(ctx, &pb.CloseRequest{Fd: readFd.Fd})
 ```
 
 ## Testing with grpcurl
@@ -134,26 +139,23 @@ client.CloseSession(ctx, &pb.CloseSessionRequest{
 # List services
 grpcurl -plaintext localhost:9000 list
 
-# Create a session
-grpcurl -plaintext -d '{"user":"alice","groups":["users"]}' \
-    localhost:9000 plan92.v1.Plan92/CreateSession
+# Open a file (returns fd)
+grpcurl -plaintext -d '{"path":"/test.txt","mode":"OPEN_MODE_WRITE"}' \
+    localhost:9000 plan92.v1.Plan92/Open
+
+# Get file stats
+grpcurl -plaintext -d '{"path":"/test.txt"}' \
+    localhost:9000 plan92.v1.Plan92/Stat
 ```
 
 ## Design Decisions
 
-### Hierarchical Permission Checking
+### Global File Descriptors
 
-When opening a file, Plan92 validates permissions at each level of the path:
-1. Split path into components (e.g., `/a/b/file.txt` → `["a", "b", "file.txt"]`)
-2. For each component, check execute permission on parent directory
-3. For the final component, check the requested access mode (read/write/exec)
-
-### Session-Based Isolation
-
-Each session maintains its own file descriptor table. This provides:
-- **Isolation** - Sessions cannot access each other's file descriptors
-- **Automatic cleanup** - Closing a session releases all associated FDs
-- **Multi-tenant support** - Different users can safely use the same service
+All file descriptors are managed in a single global table. This provides:
+- **Simplicity** - No session management overhead
+- **Composability** - FDs can be passed between different operations
+- **Pipeline support** - Natural fit for building file processing pipelines
 
 ### In-Memory Storage
 
@@ -165,9 +167,40 @@ The current implementation uses in-memory storage for simplicity and speed:
 
 ### Streaming Pattern
 
+Streaming operations use `oneof` for efficient data transfer:
 - **Metadata-first**: First message contains metadata (FD, size, etc.)
 - **Chunk streaming**: Subsequent messages contain data chunks
 - **Efficient**: 32KB chunks for optimal network utilization
+
+### Open Modes
+
+Files can be opened with different modes:
+- `OPEN_MODE_READ` - Open for reading
+- `OPEN_MODE_WRITE` - Open for writing (creates if doesn't exist)
+- `OPEN_MODE_RDWR` - Open for both reading and writing
+- `OPEN_MODE_TRUNC` - Truncate file on open
+- `OPEN_MODE_EXEC` - Open for execution
+- `OPEN_MODE_RCLOSE` - Remove file on close
+
+## Testing
+
+The service includes comprehensive tests mimicking Unix `cat` command behavior:
+
+```bash
+cd /home/workspace/plan92/server
+go test -v -run TestCatCommand
+
+# All tests:
+# ✓ TestCatCommand_SimpleFile
+# ✓ TestCatCommand_EmptyFile
+# ✓ TestCatCommand_LargeFile (100KB)
+# ✓ TestCatCommand_MultipleFiles
+# ✓ TestCatCommand_NonExistentFile
+# ✓ TestCatCommand_BinaryContent
+# ✓ TestCatCommand_UTF8Content
+```
+
+See `cat_test_README.md` for detailed test documentation.
 
 ## Future Enhancements
 
@@ -177,4 +210,13 @@ The current implementation uses in-memory storage for simplicity and speed:
 - **Named pipes and Unix sockets** for inter-process communication
 - **File locking** (flock, fcntl)
 - **Directory operations** (readdir, mkdir, rmdir)
-- **ACLs** beyond basic Unix permissions
+- **Permission system** (optional user/group access control)
+
+## Dependencies
+
+- `google.golang.org/grpc` - gRPC framework
+- `google.golang.org/protobuf` - Protocol Buffers
+
+## License
+
+See parent project license.

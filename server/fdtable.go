@@ -4,15 +4,12 @@ import (
 	"fmt"
 	"sync"
 	"sync/atomic"
-
-	pb "github.com/accretional/plan92/gen/plan92/v1"
 )
 
 // FileHandle represents an open file descriptor
 type FileHandle struct {
 	FD     int32
 	Path   string
-	Mode   pb.OpenMode
 	Offset int64
 	Data   *FileData
 }
@@ -35,7 +32,7 @@ func NewFDTable() *FDTable {
 }
 
 // Allocate allocates a new file descriptor
-func (t *FDTable) Allocate(path string, mode pb.OpenMode, data *FileData) int32 {
+func (t *FDTable) Allocate(path string, data *FileData) int32 {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
@@ -43,12 +40,16 @@ func (t *FDTable) Allocate(path string, mode pb.OpenMode, data *FileData) int32 
 	t.handles[fd] = &FileHandle{
 		FD:     fd,
 		Path:   path,
-		Mode:   mode,
 		Offset: 0,
 		Data:   data,
 	}
 
 	return fd
+}
+
+// AllocateSimple is an alias for Allocate (for clarity in new code)
+func (t *FDTable) AllocateSimple(path string, data *FileData) int32 {
+	return t.Allocate(path, data)
 }
 
 // Get retrieves a file handle by FD

@@ -34,26 +34,23 @@ func main() {
 
 	log.Printf("Plan92 server starting on port %s...", port)
 
-	// Initialize storage and session manager
+	// Initialize storage and global FD table
 	storage := NewMemoryStorage()
-	sessions := NewSessionManager()
+	fdTable := NewFDTable()
 
 	// Create gRPC server
 	server := grpc.NewServer()
 
-	// Create and register services
-	inodeService := NewInodeService(storage, sessions)
-	plan92Service := NewPlan92Service(storage, sessions, inodeService)
+	// Create and register service
+	plan92Service := NewPlan92Service(storage, fdTable)
 
-	pb.RegisterPlan92Server(server, plan92Service)
-	pb.RegisterInodeServiceServer(server, inodeService)
+	pb.RegisterPlan92FSServer(server, plan92Service)
 
 	// Register reflection service for debugging
 	reflection.Register(server)
 
 	log.Printf("Plan92 server registered services:")
-	log.Printf("  - plan92.v1.Plan92")
-	log.Printf("  - plan92.v1.InodeService")
+	log.Printf("  - plan92.v1.Plan92FS")
 
 	// Setup graceful shutdown
 	go func() {
