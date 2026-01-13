@@ -1,0 +1,12 @@
+version: v2
+modules:
+  - path: .
+    name: buf.build/accretional/plan92
+lint:
+  use:
+    - DEFAULT
+breaking:
+  use:
+    - FILE
+deps:
+  - buf.build/googleapis/googleapis

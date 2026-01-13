@@ -1,0 +1,203 @@
+syntax = "proto3";
+
+package plan92.v1;
+
+option go_package = "github.com/accretional/plan92/gen/plan92/v1;plan92v1";
+
+import "google/protobuf/empty.proto";
+import "google/protobuf/timestamp.proto";
+
+// Plan92 is a Plan9-like filesystem service providing file I/O operations over gRPC.
+// It supports Open, Read, Write, Close operations with session-based FD management
+// and hierarchical permission checking.
+service Plan92 {
+  // Session management
+  rpc CreateSession(CreateSessionRequest) returns (CreateSessionResponse);
+  rpc CloseSession(CloseSessionRequest) returns (google.protobuf.Empty);
+
+  // File operations
+  rpc Open(OpenRequest) returns (FileStatus);
+  rpc Read(ReadRequest) returns (stream ReadResponse);
+  rpc Write(stream WriteRequest) returns (WriteResponse);
+  rpc Close(CloseRequest) returns (CloseResponse);
+  rpc Stat(StatRequest) returns (StatResponse);
+}
+
+// ============================================================================
+// Session Management
+// ============================================================================
+
+message CreateSessionRequest {
+  string user = 1;              // User for permission checking
+  repeated string groups = 2;   // User groups for permission checking
+}
+
+message CreateSessionResponse {
+  string session_id = 1;
+  google.protobuf.Timestamp created_at = 2;
+}
+
+message CloseSessionRequest {
+  string session_id = 1;
+}
+
+// ============================================================================
+// File Operations
+// ============================================================================
+
+// OpenRequest opens a file at the specified path with the given mode
+message OpenRequest {
+  string path = 1;
+  OpenMode mode = 2;
+  string session_id = 3;
+}
+
+// OpenMode specifies how a file should be opened
+enum OpenMode {
+  OPEN_MODE_UNSPECIFIED = 0;
+  OPEN_MODE_READ = 1;      // OREAD - open for reading
+  OPEN_MODE_WRITE = 2;     // OWRITE - open for writing
+  OPEN_MODE_RDWR = 3;      // ORDWR - open for read/write
+  OPEN_MODE_EXEC = 4;      // OEXEC - open for execution
+  OPEN_MODE_TRUNC = 16;    // OTRUNC - truncate file on open
+  OPEN_MODE_RCLOSE = 64;   // ORCLOSE - remove file on close
+}
+
+// FileStatus is returned from Open and represents an open file descriptor
+message FileStatus {
+  int32 fd = 1;
+  string path = 2;
+  FileInfo info = 3;
+  OpenMode mode = 4;
+  string session_id = 5;
+}
+
+// FileInfo contains metadata about a file
+message FileInfo {
+  FileType type = 1;
+  uint32 mode = 2;                       // Unix permission bits (e.g., 0644)
+  int64 length = 3;
+  google.protobuf.Timestamp mtime = 4;
+  string owner = 5;
+  string group = 6;
+}
+
+// FileType indicates the type of file
+enum FileType {
+  FILE_TYPE_UNSPECIFIED = 0;
+  FILE_TYPE_REGULAR = 1;
+  FILE_TYPE_DIRECTORY = 2;
+  FILE_TYPE_SYMLINK = 3;
+  FILE_TYPE_PIPE = 4;       // Named pipe / FIFO
+  FILE_TYPE_SOCKET = 5;     // Unix domain socket
+  FILE_TYPE_DEVICE = 6;
+}
+
+// ============================================================================
+// Read Operations
+// ============================================================================
+
+// ReadRequest requests data from an open file descriptor
+message ReadRequest {
+  int32 fd = 1;
+  int64 offset = 2;       // -1 for current position
+  int32 count = 3;        // Max bytes to read
+}
+
+// ReadResponse is streamed back containing file data
+message ReadResponse {
+  oneof data {
+    ReadMetadata metadata = 1;
+    bytes chunk = 2;
+  }
+}
+
+// ReadMetadata is sent first in the read stream
+message ReadMetadata {
+  int32 fd = 1;
+  int64 total_size = 2;
+  FileInfo file_info = 3;
+}
+
+// ============================================================================
+// Write Operations
+// ============================================================================
+
+// WriteRequest is streamed to write data to an open file descriptor
+message WriteRequest {
+  oneof data {
+    WriteMetadata metadata = 1;
+    bytes chunk = 2;
+  }
+}
+
+// WriteMetadata is sent first in the write stream
+message WriteMetadata {
+  int32 fd = 1;
+  int64 offset = 2;       // -1 for append
+  int64 total_size = 3;   // Expected total write size
+}
+
+// WriteResponse is returned after the write completes
+message WriteResponse {
+  int32 fd = 1;
+  int64 bytes_written = 2;
+  string error = 3;
+}
+
+// ============================================================================
+// Close Operations
+// ============================================================================
+
+// CloseRequest closes an open file descriptor
+message CloseRequest {
+  int32 fd = 1;
+}
+
+// CloseResponse indicates if the close was successful
+message CloseResponse {
+  bool success = 1;
+}
+
+// ============================================================================
+// Stat Operations
+// ============================================================================
+
+// StatRequest gets file information without opening
+message StatRequest {
+  string path = 1;
+  string session_id = 2;
+}
+
+// StatResponse returns file information
+message StatResponse {
+  FileInfo info = 1;
+}
+
+// ============================================================================
+// Error Information
+// ============================================================================
+
+// FSError provides detailed error information (included in gRPC status details)
+message FSError {
+  FSErrorCode code = 1;
+  string message = 2;
+  string path = 3;
+  int32 fd = 4;
+}
+
+// FSErrorCode matches common filesystem error codes
+enum FSErrorCode {
+  FS_ERROR_CODE_UNSPECIFIED = 0;
+  FS_ERROR_CODE_PERMISSION_DENIED = 1;    // EPERM
+  FS_ERROR_CODE_NO_SUCH_FILE = 2;         // ENOENT
+  FS_ERROR_CODE_IO_ERROR = 3;             // EIO
+  FS_ERROR_CODE_BAD_FD = 4;               // EBADF
+  FS_ERROR_CODE_FILE_EXISTS = 5;          // EEXIST
+  FS_ERROR_CODE_NOT_DIRECTORY = 6;        // ENOTDIR
+  FS_ERROR_CODE_IS_DIRECTORY = 7;         // EISDIR
+  FS_ERROR_CODE_INVALID_ARGUMENT = 8;     // EINVAL
+  FS_ERROR_CODE_FILE_TOO_LARGE = 9;       // EFBIG
+  FS_ERROR_CODE_NO_SPACE = 10;            // ENOSPC
+  FS_ERROR_CODE_SESSION_EXPIRED = 11;
+}

@@ -1,0 +1,72 @@
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool
+*.out
+coverage.txt
+coverage.html
+
+# Go workspace file
+go.work
+
+# Build output
+/server/plan92-server
+/client/plan92-client
+/bin/
+/dist/
+
+# Generated proto code (regenerate with protoc)
+/gen/
+
+# Dependency directories
+/vendor/
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# OS files
+Thumbs.db
+.Spotlight-V100
+.Trashes
+
+# Temporary files
+*.tmp
+*.bak
+*.log
+
+# Buf build artifacts
+.buf/
+
+# Go module download cache (optional - uncomment if needed)
+# This is useful if you want to commit go.sum but not the downloaded modules
+# go.sum is typically committed, but this prevents accidental commits of cache
+# /go/
+
+# Testing artifacts
+/testdata/output/
+*.prof
+*.pprof
+
+# CI/CD artifacts
+/.github/
+/ci/
+
+# Local development environment files
+.env
+.env.local
+.env.*.local
+
+# Backup files
+*.orig
